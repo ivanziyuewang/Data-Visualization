@@ -1,0 +1,184 @@
+---
+title: "Visualising Fortune100"
+author: "Ziyue Wang"
+date: "12/29/2018"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, highlight = FALSE)
+getwd()
+setwd("/Users/ivanziyue/Documents/STAT 4310")
+library(zipcode)
+library(ggmap)
+library(tidyr)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(maps)
+library(treemapify)
+library(ggplotify)
+```
+
+## Data Summary
+### Merging geographical data
+```{r}
+fortune500 <- read.csv("Fortune500.csv")
+colnames(fortune500)[which(names(fortune500) == "Hqzip")] <- "zip"
+data(zipcode)
+data <- merge(fortune500, zipcode, by='zip')
+```
+Using the original fortune 500 dataset combined with zipcode package from CRAN, mapping analysis can be conducted to visualize the geographical distribution for companies and sectors of interest. 
+
+### Cleaning unnecessary columns and rows
+```{r}
+useless_rows <- c(101:500)
+useless_cols <- c("zip", "Website", "Hqlocation", "Hqaddr", "Address",
+                 "Ceo", "Ceo.title", "Prftchange", "Ticker", "Fullname",
+                 "Hqcity", "Hqstate", "Industry", "Revchange", "Hqtel")
+data <- data[ ,! names(data) %in% useless_cols, drop = F]
+data <- data[order(data$Rank),]
+# delete the company ranking from 101 to 500
+fortune100 <- data[-c(101:500),] 
+# Derive additional financial metrics
+fortune100$Profit_Margin <- fortune100$Profits/fortune100$Revenues 
+fortune100$Debt_Ratio <- (fortune100$Assets-fortune100$Totshequity)/fortune100$Assets
+fortune100$Assets_Turnover <- fortune100$Revenues/fortune100$Assets
+# Overview of the final data
+head(fortune100)
+# 
+```
+### Extract top sector data
+```{r}
+top_sector <- c("Financials", "Technology", "Retailing", "Health Care", "Energy")
+sectors <- fortune100[which(fortune100$Sector %in% top_sector),]
+# Remove Outlier Walmart
+sectors <- sectors[-1,]
+# Arrange by sector
+sectors <- sectors %>% arrange(Sector, Revenues)
+# Add id number to each company for graphical purpose
+sectors$id <- c(1:nrow(sectors))
+head(sectors)
+sectors
+```
+### Top Sector Performance
+```{r}
+# Get the name and the y position of each label
+label_data <- sectors
+number_of_bar <- nrow(label_data)
+angle <- 90 - 360 * (label_data$id-0.5) /number_of_bar   
+
+# Substract 0.5 to place the angle of the center of the bars 
+label_data$hjust <- ifelse(angle < -90, 1, 0)
+label_data$angle <- ifelse(angle < -90, angle+180, angle)
+
+# prepare a data frame for base lines
+base <- sectors %>% 
+  group_by(Sector) %>% 
+  summarize(start=min(id), end=max(id)) %>% 
+  rowwise() %>% 
+  mutate(title=mean(c(start, end)))
+
+# prepare a data frame for grid (scales)
+grid <- base
+grid$end <- grid$end[c( nrow(grid), 1:nrow(grid)-1)] + 1
+grid$start <- grid$start - 1
+grid <- grid[-1,]
+
+# Make the plot
+bars <- ggplot(sectors, aes(x=as.factor(id), y=Revenues, fill=Sector)) +  
+  geom_bar(aes(x=as.factor(id), y=Revenues, fill=Sector), stat="identity", alpha=1) +
+  
+  # Add a val=100k/200k/300k/400k lines. I do it at the beginning to make sur barplots are OVER it.
+  geom_segment(data=grid, aes(x = end, y = 200000, xend = start, yend = 200000), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  geom_segment(data=grid, aes(x = end, y = 150000, xend = start, yend = 150000), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  geom_segment(data=grid, aes(x = end, y = 100000, xend = start, yend = 100000), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  geom_segment(data=grid, aes(x = end, y = 50000, xend = start, yend = 50000), colour = "grey", alpha=1, size=0.3 , inherit.aes = FALSE ) +
+  
+  # Add text showing the value of each 100k/200k/300k/400k lines
+  annotate("text", x = rep(max(sectors$id),4), y = c(50000, 100000, 150000, 200000), label = c("50k", "100k", "150k", "200k") , color="grey", size=3 , angle=0, fontface="bold", hjust=1) +
+  
+  geom_bar(aes(x=as.factor(id), y=Revenues, fill=Sector), stat="identity", alpha=0.5) +
+  ylim(-100000,250000) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank(),
+    plot.margin = unit(rep(-1,4), "cm") 
+  ) +
+  coord_polar() + 
+  geom_text(data=label_data, aes(x=id, y=Revenues, label=Title, hjust=hjust), 
+  color="black", fontface="bold",alpha=0.9, size=2.5, angle= label_data$angle, inherit.aes = FALSE) 
+bars
+```
+### Geographical Info
+```{R}
+dat <- read.csv("gdp.csv", header = FALSE)
+GDP2016 <- data.frame(tolower(as.character(dat$V2[7:65])), as.numeric(dat$V22[7:65]), stringsAsFactors=FALSE)
+states <- map_data("state") #obtain states map of usa
+names(GDP2016) <- c("region","GDP")
+GDPMap <- merge(GDP2016, states, by = "region")
+GDPmap <- ggplot() + 
+  geom_polygon(data = GDPMap, aes(long, lat, group = group, fill = GDP), 
+               color = "white") + #coord_quickmap() + 
+  coord_map("albers", parameters = c(45.5, 29.5)) +
+  theme_void() + 
+  scale_fill_gradientn(colours = c("white", "orange"), breaks = c(100000, 500000, 2500000), 
+                       trans = "log") 
+GDPmap + geom_point(data = fortune100, aes(x = longitude, y = latitude, size = Revenues), 
+                    shape = 21, color = "white", fill = "orangered", alpha=0.6) +
+  labs(title = "Mapping the Fortune 100") +
+  theme_wsj(base_size = 4, color = "brown", base_family = "sans",
+  title_family = "mono") + labs(title = "Mapping the Fortune100") + 
+  annotate("text", x = -79, y = 25, label = "Miami", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -84, y = 28, label = "Tempa", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -85, y = 33, label = "Atlanta", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -78, y = 35, label = "Charlotte", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -75, y = 38, label = "Washington D.C.", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -72, y = 39, label = "Philalphia", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -69, y = 40, label = "New York City", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -86, y = 35.5, label = "Nashville", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -90, y = 34.5, label = "Memphis", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -96, y = 32, label = "Dallas", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -94, y = 29, label = "Houston", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -101, y = 28.7, label = "San Antonio", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -93, y = 46, label = "Minneapolis", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -91, y = 42.5, label = "Chicago", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -81, y = 43, label = "Detroit", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -120, y = 47, label = "Seattle", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -125, y = 35.5, label = "San Francisco", size = 2.4, colour = "slategrey") +
+  annotate("text", x = -121, y = 32.5, label = "Los Angeles", size = 2.4, colour = "slategrey") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12)) +
+  theme(legend.text = element_text(size = 6), 
+        legend.position = "right",
+        legend.direction = "vertical")
+```
+### Treemap
+```{r}
+require(foreign)
+require(ggthemes)
+for (j in seq_len(ncol(sectors))) {
+   if (class(sectors[, j]) == "factor")
+       levels(sectors[, j]) <- iconv(levels(sectors[, j]), 
+                                     from = "latin1", to = "UTF-8")
+}
+ggplot(sectors, aes(area = Revenues, fill = Sector, label = Title,
+                subgroup = Sector)) +
+  geom_treemap() +
+  geom_treemap_subgroup_border() +
+  geom_treemap_subgroup_text(place = "centre", grow = T, 
+                             alpha = 0.2, colour = "black", 
+                             fontface = "italic", min.size = 0) +
+  geom_treemap_text(colour = "white", place = "topleft", 
+                    reflow = TRUE, alpha = 0.9, min.size = 0) +
+  theme_wsj(base_size = 6, color = "brown", base_family = "sans",
+  title_family = "mono") + labs(title = "Visualizing Fortune100's Top Sectors") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.text = element_text(size = 8))  
+```
